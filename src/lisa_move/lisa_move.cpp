@@ -47,8 +47,8 @@ public:
                 continue;
             }
             
-            double sx = goal->x - this->tf_listener.getOrigin().x();
-            double sy = goal->y - this->tf_listener.getOrigin().y();
+            //double sx = goal->x - this->tf_listener.getOrigin().x();
+            //double sy = goal->y - this->tf_listener.getOrigin().y();
 
 
 

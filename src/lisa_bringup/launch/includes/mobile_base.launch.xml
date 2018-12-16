@@ -17,6 +17,8 @@
     <param name="self_diagnose" value="false"/>
   </node>
 
+  <node name="davis_ros_driver" pkg="davis_ros_driver" type="davis_ros_driver" />
+
   <!-- The odometry estimator -->
   <!--node pkg="tf" type="static_transform_publisher" name="odom_to_base_footprint_static" args="0 0 0 0 0 0 1 odom base_footprint 100" /-->
 
