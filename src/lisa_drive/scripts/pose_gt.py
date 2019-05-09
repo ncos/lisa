@@ -5,6 +5,7 @@ import rosbag
 import rospy
 import cv2
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge, CvBridgeError
 import os
 
@@ -26,24 +27,31 @@ parser.add_argument("--imu_topic", default="/dvs/imu", help="IMU topic")
 parser.add_argument("--calib_topic", default="/dvs/camera_info", help="Camera info topic")
 parser.add_argument("--groundtruth_topic", default="/optitrack/davis", help="Ground truth topic")
 parser.add_argument("--reset_time", help="Remove time offset", action="store_true")
+parser.add_argument("--pose_topic", default="/DAVIS240C/odom", help="Pose topic")
+parser.add_argument('--frame_rate', default=40, help="Desired frame rate.")
+parser.add_argument('--gt_frame_rate', default=200, help="Frame rate for ground truth (VICON).")
 args = parser.parse_args()
 
 # Use a CvBridge to convert ROS images to OpenCV images so they can be saved.
 bridge = CvBridge()
 
+
 def get_filename(i):
-    return "images/frame_" + str(i).zfill(8)  + ".png"
-    
+    return "images/frame_" + str(i).zfill(8) + ".png"
+
+
 def get_depth_filename(i):
-    return "depthmaps/frame_" + str(i).zfill(8)  + ".exr"
+    return "depthmaps/frame_" + str(i).zfill(8) + ".exr"
+
 
 def timestamp_str(ts):
     return str(ts.secs) + "." + str(ts.nsecs).zfill(9)
 
+
 # Create folders and files
 if not os.path.exists("images"):
     os.makedirs("images")
-    
+
 if not os.path.exists("depthmaps"):
     os.makedirs("depthmaps")
 
@@ -52,6 +60,7 @@ depthmap_index = 0
 event_sum = 0
 imu_msg_sum = 0
 groundtruth_msg_sum = 0
+pose_msg_sum = 0
 calib_written = False
 
 events_file = open('events.txt', 'w')
@@ -60,11 +69,13 @@ depthmaps_file = open('depthmaps.txt', 'w')
 imu_file = open('imu.txt', 'w')
 calib_file = open('calib.txt', 'w')
 groundtruth_file = open('groundtruth.txt', 'w')
+poses_file = open('poses.txt', 'w')
 
 with rosbag.Bag(args.bag, 'r') as bag:
     # reset time?
     reset_time = rospy.Time()
-    if args.reset_time:
+    start_t = rospy.Time()
+    if True:
         first_msg = True
         for topic, msg, t in bag.read_messages():
             got_stamp = False
@@ -80,15 +91,20 @@ with rosbag.Bag(args.bag, 'r') as bag:
             elif topic == args.imu_topic:
                 stamp = msg.header.stamp
                 got_stamp = True
+            elif topic == args.pose_topic:
+                stamp = msg.header.stamp
+                got_stamp = True
 
             if got_stamp:
                 if first_msg:
                     reset_time = stamp
                     first_msg = False
+		    start_t = reset_time
                 else:
                     if stamp < reset_time:
                         reset_time = stamp
     print "Reset time: " + timestamp_str(reset_time)
+    print "Start time: " + timestamp_str(start_t)
 
     for topic, msg, t in bag.read_messages():
         # Images
@@ -164,7 +180,7 @@ with rosbag.Bag(args.bag, 'r') as bag:
             groundtruth_file.write(str(pose.pose.orientation.w) + "\n")
 
             groundtruth_msg_sum = groundtruth_msg_sum + 1
-            
+
         # Depth maps
         elif topic == args.depthmap_topic:
             try:
@@ -179,10 +195,26 @@ with rosbag.Bag(args.bag, 'r') as bag:
             exr_header = OpenEXR.Header(cv_depth.shape[1], cv_depth.shape[0])
             exr_header['channels'] = {'Z': Imath.Channel(Imath.PixelType(Imath.PixelType.FLOAT))}
             exr = OpenEXR.OutputFile(get_depth_filename(depthmap_index), exr_header)
-            exr.writePixels({'Z' : cv_depth.tostring()})
+            exr.writePixels({'Z': cv_depth.tostring()})
             exr.close()
 
             depthmap_index = depthmap_index + 1
+
+        elif topic == args.pose_topic:
+            # Case for nav_msgs/Odometry
+	    if (msg.header.stamp).to_sec() > (start_t.to_sec() + ((pose_msg_sum + 1.0)/args.frame_rate)):
+                pose_msg_sum = pose_msg_sum + 1
+
+		poses_file.write(timestamp_str(msg.header.stamp - reset_time) + " ")
+                poses_file.write(str(msg.pose.pose.position.x) + " ")
+                poses_file.write(str(msg.pose.pose.position.y) + " ")
+                poses_file.write(str(msg.pose.pose.position.z) + " ")
+                poses_file.write(str(msg.pose.pose.orientation.w) + " ")
+                poses_file.write(str(msg.pose.pose.orientation.x) + " ")
+                poses_file.write(str(msg.pose.pose.orientation.y) + " ")
+                poses_file.write(str(msg.pose.pose.orientation.z) + "\n")
+
+
 
 # statistics (remove missing groundtruth or IMU file if not available)
 print "All data extracted!"
@@ -191,6 +223,7 @@ print "Images:       " + str(image_index)
 print "Depth maps:   " + str(depthmap_index)
 print "IMU:          " + str(imu_msg_sum)
 print "Ground truth: " + str(groundtruth_msg_sum)
+print "Pose:         " + str(pose_msg_sum)
 
 # close all files
 events_file.close()
@@ -198,6 +231,7 @@ images_file.close()
 depthmaps_file.close()
 imu_file.close()
 groundtruth_file.close()
+poses_file.close()
 
 # clean up
 if imu_msg_sum == 0:
@@ -207,8 +241,8 @@ if imu_msg_sum == 0:
 if groundtruth_msg_sum == 0:
     os.remove("groundtruth.txt")
     print "Removed ground truth file since there were no messages."
-    
+
 if depthmap_index == 0:
     os.remove("depthmaps.txt")
     os.removedirs("depthmaps")
-    print "Removed depthmaps file since there were no messages."
+print "Removed depthmaps file since there were no messages."
